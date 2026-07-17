@@ -38,6 +38,7 @@ find_package(OpenGL)
 find_package(GLUT)
 find_package(ALSA)
 find_package(Curses)
+find_package(FFTW3)
 
 if(CMAKE_C_FLAGS STREQUAL "")
   set(CMAKE_C_FLAGS "-O3 -g")

@@ -44,4 +44,13 @@ else()
   message(STATUS "Will NOT build simulator (OpenGL or GLUT missing)")
 endif()
 
+if(FFTW3_FOUND)
+  include_directories(${FFTW3_INCLUDE_DIRS})
+  add_executable(spectrogram3d spectrogram3d.c)
+  target_link_libraries(spectrogram3d ol ${FFTW3_LIBRARIES} m)
+else()
+  message(STATUS "Will NOT build spectrogram3d (FFTW3 missing)")
+endif()
+
 add_subdirectory(qplayvid)
+add_subdirectory(lasertty)
