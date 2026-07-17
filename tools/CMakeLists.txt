@@ -44,4 +44,7 @@ else()
   message(STATUS "Will NOT build simulator (OpenGL or GLUT missing)")
 endif()
 
+add_executable(etherdream_bridge etherdream_bridge.cpp)
+target_link_libraries(etherdream_bridge openlase ${CMAKE_THREAD_LIBS_INIT})
+
 add_subdirectory(qplayvid)
