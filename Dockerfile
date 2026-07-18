@@ -1,4 +1,4 @@
-FROM --platform=linux/amd64 ubuntu:22.04
+FROM ubuntu:22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -15,28 +15,36 @@ RUN apt-get update && apt-get install -y \
     libswscale-dev \
     libgl1-mesa-dev \
     libglu1-mesa-dev \
+    libgl1-mesa-dri \
+    libgl1-mesa-glx \
     freeglut3-dev \
     libx11-dev \
     libxext-dev \
     mesa-utils \
     x11-apps \
+    xvfb \
+    x11vnc \
     python3 \
     python3-dev \
     python3-pip \
     yasm \
     && rm -rf /var/lib/apt/lists/*
 
-# Set environment for X11
+# Set environment for X11 and software rendering
 ENV DISPLAY=:0
+ENV LIBGL_ALWAYS_SOFTWARE=1
 
 WORKDIR /openlase
 
 COPY . .
 
 RUN mkdir -p build && cd build && \
-    cmake .. && \
+    cmake -DBUILD_TRACER=OFF .. && \
     make -j$(nproc)
+
+# Make entrypoint script executable
+RUN chmod +x /openlase/docker-entrypoint.sh
 
 WORKDIR /openlase/build
 
-CMD ["/bin/bash"]
+ENTRYPOINT ["/openlase/docker-entrypoint.sh"]
