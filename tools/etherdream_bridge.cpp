@@ -73,7 +73,7 @@ static void send_ack(int client_fd, uint8_t command) {
     resp.response = ACK;
     resp.command = command;
     resp.status = state_to_status(g_dac_state.load());
-    resp.buffer_free = g_buffer_free.load();
+    resp.buffer_empty = g_buffer_free.load();
     send(client_fd, &resp, sizeof(resp), 0);
 }
 
@@ -83,7 +83,7 @@ static void send_nak(int client_fd, uint8_t command, uint8_t nak_type) {
     resp.response = nak_type;
     resp.command = command;
     resp.status = state_to_status(g_dac_state.load());
-    resp.buffer_free = g_buffer_free.load();
+    resp.buffer_empty = g_buffer_free.load();
     send(client_fd, &resp, sizeof(resp), 0);
 }
 
