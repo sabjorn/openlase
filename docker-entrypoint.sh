@@ -3,61 +3,197 @@
 
 set -e
 
-echo "======================================"
-echo "OpenLase Docker Container"
-echo "======================================"
-echo ""
+APP="${1:-help}"
 
-# Start virtual X server
-echo "Starting Xvfb..."
-Xvfb :99 -screen 0 1024x768x24 &
-export DISPLAY=:99
-sleep 2
+# Start services
+start_services() {
+    echo "Starting Xvfb..."
+    Xvfb :99 -screen 0 1024x768x24 &
+    export DISPLAY=:99
+    sleep 2
 
-# Start VNC server
-echo "Starting x11vnc on port 5900..."
-# Create password file (password: openlase)
-mkdir -p /root/.vnc
-x11vnc -storepasswd openlase /root/.vnc/passwd
-x11vnc -display :99 -rfbauth /root/.vnc/passwd -listen 0.0.0.0 -forever -bg -xkb
-sleep 2
+    echo "Starting x11vnc on port 5900..."
+    mkdir -p /root/.vnc
+    x11vnc -storepasswd openlase /root/.vnc/passwd 2>/dev/null
+    x11vnc -display :99 -rfbauth /root/.vnc/passwd -listen 0.0.0.0 -forever -bg -xkb > /dev/null 2>&1
+    sleep 2
 
-# Start JACK in dummy mode
-echo "Starting JACK server (dummy mode)..."
-jackd -d dummy -r 48000 &
-JACK_PID=$!
-sleep 3
+    echo "Starting JACK server (dummy mode)..."
+    jackd -d dummy -r 48000 > /dev/null 2>&1 &
+    sleep 3
 
-# Check if JACK started successfully
-if ! ps -p $JACK_PID > /dev/null; then
-    echo "Error: JACK failed to start"
-    exit 1
-fi
-
-echo ""
-echo "======================================"
-echo "✓ Services Started"
-echo "======================================"
-echo ""
-echo "  VNC Server: localhost:5900 (or host port 5901)"
-echo "  VNC Password: openlase"
-echo "  JACK Server: running (dummy mode, 48kHz)"
-echo "  Display: :99"
-echo ""
-echo "Connect with VNC client to see the display"
-echo ""
-
-# Run the command passed to docker run, or keep container alive
-if [ $# -eq 0 ]; then
-    echo "Container ready. Connect via VNC to start using the simulator."
+    echo "✓ Services ready"
     echo ""
-    echo "Available commands (run via 'docker exec'):"
-    echo "  ./tools/simulator     - Start the simulator"
-    echo "  ./examples/simple     - Run simple example"
-    echo "  ./examples/circlescope - Run circlescope example"
-    echo ""
-    # Keep container running indefinitely
-    tail -f /dev/null
-else
-    exec "$@"
-fi
+}
+
+# Connect JACK ports
+connect_jack() {
+    local source="$1"
+    local dest="$2"
+
+    echo "Connecting JACK: $source → $dest..."
+    sleep 2  # Wait for ports to register
+
+    jack_connect "${source}:out_x" "${dest}:in_x" 2>/dev/null || true
+    jack_connect "${source}:out_y" "${dest}:in_y" 2>/dev/null || true
+    jack_connect "${source}:out_r" "${dest}:in_r" 2>/dev/null || true
+    jack_connect "${source}:out_g" "${dest}:in_g" 2>/dev/null || true
+    jack_connect "${source}:out_b" "${dest}:in_b" 2>/dev/null || true
+
+    echo "✓ JACK connected"
+}
+
+# Find executable in tools or examples
+find_executable() {
+    local name="$1"
+
+    if [ -x "./tools/$name" ]; then
+        echo "./tools/$name"
+        return 0
+    elif [ -x "./examples/$name" ]; then
+        echo "./examples/$name"
+        return 0
+    fi
+
+    return 1
+}
+
+case "$APP" in
+    help|--help|-h)
+        echo "OpenLase Docker Container"
+        echo ""
+        echo "Usage: docker run [options] openlase:gui <command>"
+        echo ""
+        echo "Special commands:"
+        echo "  etherdream     - Ether Dream bridge + simulator (for network clients)"
+        echo "  simulator      - Just the simulator"
+        echo ""
+        echo "Available examples (auto-connected to simulator):"
+        for example in ./examples/*; do
+            [ -x "$example" ] && [ -f "$example" ] && echo "  $(basename $example)"
+        done
+        echo ""
+        echo "Available tools:"
+        for tool in ./tools/*; do
+            [ -x "$tool" ] && [ -f "$tool" ] && echo "  $(basename $tool)"
+        done
+        echo ""
+        echo "Examples:"
+        echo "  # Ether Dream bridge (for network clients)"
+        echo "  docker run -d -p 5901:5900 -p 7765:7765 openlase:gui etherdream"
+        echo ""
+        echo "  # Run simple example"
+        echo "  docker run -it --rm -p 5901:5900 openlase:gui simple"
+        echo ""
+        echo "  # Just the simulator"
+        echo "  docker run -it --rm -p 5901:5900 openlase:gui simulator"
+        echo ""
+        echo "Connect via VNC to localhost:5901 (password: openlase)"
+        exit 0
+        ;;
+
+    etherdream)
+        echo "======================================"
+        echo "Ether Dream Bridge + Simulator"
+        echo "======================================"
+        echo ""
+        start_services
+
+        echo "Starting simulator..."
+        ./tools/simulator &
+        SIMULATOR_PID=$!
+
+        echo "Starting etherdream_bridge..."
+        ./tools/etherdream_bridge > /tmp/bridge.log 2>&1 &
+        BRIDGE_PID=$!
+
+        connect_jack "libol" "simulator"
+
+        echo ""
+        echo "======================================"
+        echo "✓ Ready!"
+        echo "======================================"
+        echo "  VNC:         localhost:5901 (password: openlase)"
+        echo "  Ether Dream: localhost:7765 (TCP)"
+        echo ""
+        echo "View bridge logs: docker exec <container> tail -f /tmp/bridge.log"
+        echo ""
+
+        # Wait for processes
+        wait $SIMULATOR_PID $BRIDGE_PID
+        ;;
+
+    simulator)
+        echo "======================================"
+        echo "Simulator"
+        echo "======================================"
+        echo ""
+        start_services
+
+        echo "Starting simulator..."
+        echo ""
+        echo "======================================"
+        echo "✓ Ready!"
+        echo "======================================"
+        echo "  VNC: localhost:5901 (password: openlase)"
+        echo ""
+
+        exec ./tools/simulator
+        ;;
+
+    *)
+        # Try to find the executable
+        EXECUTABLE=$(find_executable "$APP")
+
+        if [ $? -eq 0 ]; then
+            # Found it - determine if it's in examples (needs simulator) or tools
+            if [[ "$EXECUTABLE" == ./examples/* ]]; then
+                echo "======================================"
+                echo "Example: $APP + Simulator"
+                echo "======================================"
+                echo ""
+                start_services
+
+                echo "Starting simulator..."
+                ./tools/simulator &
+
+                echo "Starting example: $APP..."
+                $EXECUTABLE &
+                APP_PID=$!
+
+                connect_jack "libol" "simulator"
+
+                echo ""
+                echo "======================================"
+                echo "✓ Ready!"
+                echo "======================================"
+                echo "  VNC: localhost:5901 (password: openlase)"
+                echo ""
+
+                wait $APP_PID
+            else
+                # It's a tool - just run it
+                echo "======================================"
+                echo "Tool: $APP"
+                echo "======================================"
+                echo ""
+                start_services
+
+                echo "Starting $APP..."
+                echo ""
+                echo "======================================"
+                echo "✓ Ready!"
+                echo "======================================"
+                echo "  VNC: localhost:5901 (password: openlase)"
+                echo ""
+
+                exec $EXECUTABLE
+            fi
+        else
+            echo "Error: Unknown command or executable '$APP'"
+            echo ""
+            echo "Run with 'help' to see available commands"
+            exit 1
+        fi
+        ;;
+esac
