@@ -190,6 +190,10 @@ static void tcp_server_thread() {
         return;
     }
 
+    // Set server socket to non-blocking mode so accept() can be interrupted
+    int flags = fcntl(server_fd, F_GETFL, 0);
+    fcntl(server_fd, F_SETFL, flags | O_NONBLOCK);
+
     printf("TCP server listening on port %d\n", ETHERDREAM_TCP_PORT);
 
     while (g_running) {
@@ -198,6 +202,11 @@ static void tcp_server_thread() {
 
         int client_fd = accept(server_fd, (struct sockaddr*)&client_addr, &client_len);
         if (client_fd < 0) {
+            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                // No connection pending, sleep briefly and check g_running
+                usleep(10000);  // 10ms
+                continue;
+            }
             if (errno == EINTR) continue;
             perror("accept failed");
             continue;
