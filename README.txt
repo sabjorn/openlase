@@ -1,3 +1,38 @@
+Docker Usage
+============
+
+Build the Docker image:
+  docker build -t openlase:gui .
+
+Run any example or tool:
+  docker run -it --rm -p 5901:5900 openlase:gui <command>
+
+Available commands:
+  simulator      - Just the OpenGL simulator
+  simple         - Simple example (auto-connected to simulator)
+  circlescope    - Circle scope example (auto-connected to simulator)
+  <any-example>  - Any executable in ./examples/ (auto-connected)
+  <any-tool>     - Any executable in ./tools/
+
+View available commands:
+  docker run openlase:gui help
+
+Connect via VNC:
+  VNC client to localhost:5901 (password: openlase)
+  Or on macOS: open vnc://localhost:5901
+
+Adding New Examples:
+  1. Add source to examples/ directory
+  2. Add build target to examples/CMakeLists.txt
+  3. Rebuild Docker image
+  4. Run: docker run openlase:gui <your-example-name>
+
+The entrypoint automatically detects executables in ./tools/ and ./examples/.
+Examples are auto-connected to the simulator via JACK.
+
+Original Documentation
+======================
+
 This project is now hosted on GitHub, so your best bet for documentation is
 the wiki. You'll find it here:
 
