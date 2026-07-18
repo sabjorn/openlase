@@ -65,7 +65,6 @@ case "$APP" in
         echo "Usage: docker run [options] openlase:gui <command>"
         echo ""
         echo "Special commands:"
-        echo "  etherdream     - Ether Dream bridge + simulator (for network clients)"
         echo "  simulator      - Just the simulator"
         echo ""
         echo "Available examples (auto-connected to simulator):"
@@ -79,9 +78,6 @@ case "$APP" in
         done
         echo ""
         echo "Examples:"
-        echo "  # Ether Dream bridge (for network clients)"
-        echo "  docker run -d -p 5901:5900 -p 7765:7765 openlase:gui etherdream"
-        echo ""
         echo "  # Run simple example"
         echo "  docker run -it --rm -p 5901:5900 openlase:gui simple"
         echo ""
@@ -90,37 +86,6 @@ case "$APP" in
         echo ""
         echo "Connect via VNC to localhost:5901 (password: openlase)"
         exit 0
-        ;;
-
-    etherdream)
-        echo "======================================"
-        echo "Ether Dream Bridge + Simulator"
-        echo "======================================"
-        echo ""
-        start_services
-
-        echo "Starting simulator..."
-        ./tools/simulator &
-        SIMULATOR_PID=$!
-
-        echo "Starting etherdream_bridge..."
-        ./tools/etherdream_bridge > /tmp/bridge.log 2>&1 &
-        BRIDGE_PID=$!
-
-        connect_jack "libol" "simulator"
-
-        echo ""
-        echo "======================================"
-        echo "✓ Ready!"
-        echo "======================================"
-        echo "  VNC:         localhost:5901 (password: openlase)"
-        echo "  Ether Dream: localhost:7765 (TCP)"
-        echo ""
-        echo "View bridge logs: docker exec <container> tail -f /tmp/bridge.log"
-        echo ""
-
-        # Wait for processes
-        wait $SIMULATOR_PID $BRIDGE_PID
         ;;
 
     simulator)
