@@ -1,3 +1,6 @@
 build
 *~
 *.pyc
+.venv
+*.egg-info
+__pycache__

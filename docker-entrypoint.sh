@@ -64,15 +64,12 @@ case "$APP" in
         echo ""
         echo "Usage: docker run [options] openlase:gui <command>"
         echo ""
-        echo "Special commands:"
-        echo "  simulator      - Just the simulator"
-        echo ""
         echo "Available examples (auto-connected to simulator):"
         for example in ./examples/*; do
             [ -x "$example" ] && [ -f "$example" ] && echo "  $(basename $example)"
         done
         echo ""
-        echo "Available tools:"
+        echo "Available tools (auto-connected to simulator):"
         for tool in ./tools/*; do
             [ -x "$tool" ] && [ -f "$tool" ] && echo "  $(basename $tool)"
         done
@@ -81,29 +78,12 @@ case "$APP" in
         echo "  # Run simple example"
         echo "  docker run -it --rm -p 5901:5900 openlase:gui simple"
         echo ""
-        echo "  # Just the simulator"
-        echo "  docker run -it --rm -p 5901:5900 openlase:gui simulator"
+        echo "  # Run etherdream_bridge"
+        echo "  docker run -it --rm -p 5901:5900 -p 7765:7765 openlase:gui etherdream_bridge"
         echo ""
         echo "Connect via VNC to localhost:5901 (password: openlase)"
+        echo "All applications automatically start with simulator for visualization"
         exit 0
-        ;;
-
-    simulator)
-        echo "======================================"
-        echo "Simulator"
-        echo "======================================"
-        echo ""
-        start_services
-
-        echo "Starting simulator..."
-        echo ""
-        echo "======================================"
-        echo "✓ Ready!"
-        echo "======================================"
-        echo "  VNC: localhost:5901 (password: openlase)"
-        echo ""
-
-        exec ./tools/simulator
         ;;
 
     *)
@@ -111,49 +91,29 @@ case "$APP" in
         EXECUTABLE=$(find_executable "$APP")
 
         if [ $? -eq 0 ]; then
-            # Found it - determine if it's in examples (needs simulator) or tools
-            if [[ "$EXECUTABLE" == ./examples/* ]]; then
-                echo "======================================"
-                echo "Example: $APP + Simulator"
-                echo "======================================"
-                echo ""
-                start_services
+            echo "======================================"
+            echo "$APP + Simulator"
+            echo "======================================"
+            echo ""
+            start_services
 
-                echo "Starting simulator..."
-                ./tools/simulator &
+            echo "Starting simulator..."
+            ./tools/simulator &
 
-                echo "Starting example: $APP..."
-                $EXECUTABLE &
-                APP_PID=$!
+            echo "Starting $APP..."
+            $EXECUTABLE &
+            APP_PID=$!
 
-                connect_jack "libol" "simulator"
+            connect_jack "libol" "simulator"
 
-                echo ""
-                echo "======================================"
-                echo "✓ Ready!"
-                echo "======================================"
-                echo "  VNC: localhost:5901 (password: openlase)"
-                echo ""
+            echo ""
+            echo "======================================"
+            echo "✓ Ready!"
+            echo "======================================"
+            echo "  VNC: localhost:5901 (password: openlase)"
+            echo ""
 
-                wait $APP_PID
-            else
-                # It's a tool - just run it
-                echo "======================================"
-                echo "Tool: $APP"
-                echo "======================================"
-                echo ""
-                start_services
-
-                echo "Starting $APP..."
-                echo ""
-                echo "======================================"
-                echo "✓ Ready!"
-                echo "======================================"
-                echo "  VNC: localhost:5901 (password: openlase)"
-                echo ""
-
-                exec $EXECUTABLE
-            fi
+            wait $APP_PID
         else
             echo "Error: Unknown command or executable '$APP'"
             echo ""
