@@ -212,14 +212,12 @@ static void tcp_server_thread() {
             continue;
         }
 
+        // Set non-blocking mode
+        int flags = fcntl(client_fd, F_GETFL, 0);
+        fcntl(client_fd, F_SETFL, flags | O_NONBLOCK);
+
         printf("Client connected from %s:%d\n",
                inet_ntoa(client_addr.sin_addr), ntohs(client_addr.sin_port));
-
-        // Set receive timeout so we can check g_running periodically
-        struct timeval tv;
-        tv.tv_sec = 1;  // 1 second timeout
-        tv.tv_usec = 0;
-        setsockopt(client_fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
 
         // Handle client commands
         bool client_connected = true;
@@ -229,7 +227,7 @@ static void tcp_server_thread() {
 
             if (bytes_read < 0) {
                 if (errno == EAGAIN || errno == EWOULDBLOCK) {
-                    // Timeout - check g_running and continue
+                    usleep(1000);  // 1ms
                     continue;
                 }
                 perror("recv failed");
