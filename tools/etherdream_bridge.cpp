@@ -440,20 +440,26 @@ int main(int argc, char *argv[]) {
         auto points = get_points_from_buffer();
 
         if (!points.empty()) {
-            olBegin(OL_POINTS);
+            olBegin(OL_LINESTRIP);
 
             for (const auto& pt : points) {
                 // Convert coordinates: int16 [-32768, 32767] -> float [-1.0, 1.0]
                 float x = (float)pt.x / 32768.0f;
                 float y = (float)pt.y / 32768.0f;
 
-                // Convert colors: uint16 [0, 65535] -> uint8 [0, 255]
-                uint8_t r = pt.r >> 8;
-                uint8_t g = pt.g >> 8;
-                uint8_t b = pt.b >> 8;
-
-                // Pack into RGB uint32_t
-                uint32_t color = (r << 16) | (g << 8) | b;
+                // Check blanking bit (control field bit 0)
+                uint32_t color;
+                if (pt.control & 0x01) {
+                    // Blanking bit set - laser off
+                    color = 0x000000;
+                } else {
+                    // Convert colors: uint16 [0, 65535] -> uint8 [0, 255]
+                    uint8_t r = pt.r >> 8;
+                    uint8_t g = pt.g >> 8;
+                    uint8_t b = pt.b >> 8;
+                    // Pack into RGB uint32_t
+                    color = (r << 16) | (g << 8) | b;
+                }
 
                 olVertex(x, y, color);
             }
