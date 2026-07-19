@@ -101,8 +101,17 @@ static std::vector<EtherDreamPoint> get_points_from_buffer() {
 static bool add_points_to_buffer(const std::vector<EtherDreamPoint>& points) {
     std::lock_guard<std::mutex> lock(g_points_mutex);
 
-    if (g_point_buffer.size() + points.size() > BUFFER_CAPACITY) {
-        return false;  // Buffer full
+    // Clear old buffer first - we're sending complete frames continuously
+    if (!g_point_buffer.empty()) {
+        int cleared = g_point_buffer.size();
+        g_point_buffer.clear();
+        g_buffer_free.fetch_add(cleared);
+    }
+
+    if (points.size() > BUFFER_CAPACITY) {
+        printf("Point buffer overflow (final): need %zu points, have %d\n",
+               points.size(), BUFFER_CAPACITY);
+        return false;  // Single frame too large
     }
 
     g_point_buffer.insert(g_point_buffer.end(), points.begin(), points.end());
