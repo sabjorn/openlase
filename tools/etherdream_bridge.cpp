@@ -221,10 +221,6 @@ static void tcp_server_thread() {
             continue;
         }
 
-        // Set non-blocking mode
-        int flags = fcntl(client_fd, F_GETFL, 0);
-        fcntl(client_fd, F_SETFL, flags | O_NONBLOCK);
-
         printf("Client connected from %s:%d\n",
                inet_ntoa(client_addr.sin_addr), ntohs(client_addr.sin_port));
 
@@ -235,10 +231,6 @@ static void tcp_server_thread() {
             ssize_t bytes_read = recv(client_fd, &command_byte, 1, 0);
 
             if (bytes_read < 0) {
-                if (errno == EAGAIN || errno == EWOULDBLOCK) {
-                    usleep(1000);  // 1ms
-                    continue;
-                }
                 perror("recv failed");
                 break;
             } else if (bytes_read == 0) {
