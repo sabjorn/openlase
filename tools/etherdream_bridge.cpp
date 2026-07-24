@@ -455,7 +455,8 @@ int main(int argc, char *argv[]) {
                     color = 0x000000;
                 } else {
                     // Convert colors: uint16 [0, 65535] -> uint8 [0, 255]
-                    uint8_t r = pt.r >> 8;
+                    // Red: TTL on/off (Channel C hardware - threshold at 50%)
+                    uint8_t r = (pt.r > 32767) ? 0xFF : 0x00;
                     uint8_t g = pt.g >> 8;
                     uint8_t b = pt.b >> 8;
                     // Pack into RGB uint32_t
