@@ -42,8 +42,11 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
 
 // Global state
 static std::atomic<bool> g_running{true};
-static std::atomic<DACState> g_dac_state{DACState::IDLE};
+static std::atomic<bool> g_verbose{false};
+static std::atomic<LightEngineState> g_light_engine_state{LightEngineState::READY};
+static std::atomic<PlaybackState> g_playback_state{PlaybackState::IDLE};
 static std::atomic<uint32_t> g_point_rate{30000};
+static std::atomic<uint32_t> g_point_count{0};
 
 // Thread-safe point buffer
 static std::mutex g_points_mutex;
@@ -67,13 +70,35 @@ static void signal_handler(int sig) {
     g_running = false;
 }
 
+// Build current DAC status structure
+static dac_status build_status() {
+    dac_status status;
+    memset(&status, 0, sizeof(status));
+
+    status.protocol = 0;
+    status.light_engine_state = static_cast<uint8_t>(g_light_engine_state.load());
+    status.playback_state = static_cast<uint8_t>(g_playback_state.load());
+    status.source = 0; // Network streaming
+
+    // Set light_engine_flags bit 0 if E-Stop occurred
+    status.light_engine_flags = (g_light_engine_state.load() == LightEngineState::ESTOP) ? 0x01 : 0x00;
+
+    // Set playback_flags bit 0 (shutter open) when ready to play
+    status.playback_flags = 0x01;  // Shutter open
+    status.source_flags = 0;
+    status.buffer_fullness = BUFFER_CAPACITY - g_buffer_free.load();
+    status.point_rate = g_point_rate.load();
+    status.point_count = g_point_count.load();
+
+    return status;
+}
+
 // Send ACK response to client
 static void send_ack(int client_fd, uint8_t command) {
     dac_response resp;
     resp.response = ACK;
     resp.command = command;
-    resp.status = state_to_status(g_dac_state.load());
-    resp.buffer_empty = g_buffer_free.load();
+    resp.status = build_status();
     send(client_fd, &resp, sizeof(resp), 0);
 }
 
@@ -82,8 +107,7 @@ static void send_nak(int client_fd, uint8_t command, uint8_t nak_type) {
     dac_response resp;
     resp.response = nak_type;
     resp.command = command;
-    resp.status = state_to_status(g_dac_state.load());
-    resp.buffer_empty = g_buffer_free.load();
+    resp.status = build_status();
     send(client_fd, &resp, sizeof(resp), 0);
 }
 
@@ -142,16 +166,15 @@ static void udp_broadcast_thread() {
     dac_broadcast beacon{};
     // Set a recognizable MAC address (can be customized)
     memcpy(beacon.mac_address, "\x00\x0A\x95\x9D\x68\x16", 6);
-    beacon.hw_revision = htons(3);
-    beacon.sw_revision = htons(3);
-    beacon.buffer_capacity = htons(BUFFER_CAPACITY);
-    beacon.max_point_rate = htonl(MAX_POINT_RATE);
+    beacon.hw_revision = 3;  // Little-endian (no conversion)
+    beacon.sw_revision = 3;
+    beacon.buffer_capacity = BUFFER_CAPACITY;
+    beacon.max_point_rate = MAX_POINT_RATE;
 
     printf("UDP broadcast thread started on port %d\n", ETHERDREAM_UDP_PORT);
 
     while (g_running) {
-        beacon.status = htons(state_to_status(g_dac_state.load()));
-        beacon.buffer_empty = htons(g_buffer_free.load());
+        beacon.status = build_status();
 
         ssize_t sent = sendto(sock, &beacon, sizeof(beacon), 0,
                              (struct sockaddr*)&broadcast_addr, sizeof(broadcast_addr));
@@ -224,6 +247,13 @@ static void tcp_server_thread() {
         printf("Client connected from %s:%d\n",
                inet_ntoa(client_addr.sin_addr), ntohs(client_addr.sin_port));
 
+        // Send initial status response (per protocol spec)
+        dac_response initial_resp;
+        initial_resp.response = ACK;
+        initial_resp.command = '?';  // Ping command
+        initial_resp.status = build_status();
+        send(client_fd, &initial_resp, sizeof(initial_resp), 0);
+
         // Handle client commands
         bool client_connected = true;
         while (g_running && client_connected) {
@@ -242,7 +272,9 @@ static void tcp_server_thread() {
 
             switch (command_byte) {
                 case CMD_PREPARE: {
-                    if (g_dac_state == DACState::IDLE) {
+                    // Can only prepare if light engine is Ready and playback is Idle
+                    if (g_light_engine_state == LightEngineState::READY &&
+                        g_playback_state == PlaybackState::IDLE) {
                         // Clear buffer and transition to PREPARED
                         {
                             std::lock_guard<std::mutex> lock(g_points_mutex);
@@ -250,9 +282,10 @@ static void tcp_server_thread() {
                             g_point_buffer.clear();
                             g_buffer_free.fetch_add(cleared);
                         }
-                        g_dac_state = DACState::PREPARED;
+                        g_playback_state = PlaybackState::PREPARED;
+                        g_point_count = 0;  // Reset point count
                         send_ack(client_fd, CMD_PREPARE);
-                        printf("State: PREPARED\n");
+                        if (g_verbose) printf("State: PREPARED\n");
                     } else {
                         send_nak(client_fd, CMD_PREPARE, NAK_INVALID);
                     }
@@ -266,13 +299,15 @@ static void tcp_server_thread() {
                         break;
                     }
 
-                    uint32_t rate = ntohl(begin_cmd.point_rate);
+                    // Data is little-endian (no conversion needed on x86/ARM)
+                    uint32_t rate = begin_cmd.point_rate;
 
-                    if (g_dac_state == DACState::PREPARED) {
+                    if (g_playback_state == PlaybackState::PREPARED) {
                         g_point_rate = rate;
-                        g_dac_state = DACState::PLAYING;
+                        g_point_count = 0;  // Reset point counter
+                        g_playback_state = PlaybackState::PLAYING;
                         send_ack(client_fd, CMD_BEGIN);
-                        printf("State: PLAYING at %u pps\n", rate);
+                        if (g_verbose) printf("State: PLAYING at %u pps\n", rate);
                     } else {
                         send_nak(client_fd, CMD_BEGIN, NAK_INVALID);
                     }
@@ -286,7 +321,8 @@ static void tcp_server_thread() {
                         break;
                     }
 
-                    uint16_t npoints = ntohs(data_hdr.npoints);
+                    // Data is little-endian (no conversion needed on x86/ARM)
+                    uint16_t npoints = data_hdr.npoints;
 
                     if (npoints == 0 || npoints > BUFFER_CAPACITY) {
                         send_nak(client_fd, CMD_DATA, NAK_INVALID);
@@ -302,20 +338,9 @@ static void tcp_server_thread() {
                         break;
                     }
 
-                    // Convert network byte order
-                    for (auto& pt : incoming) {
-                        pt.control = ntohs(pt.control);
-                        pt.x = (int16_t)ntohs(pt.x);
-                        pt.y = (int16_t)ntohs(pt.y);
-                        pt.r = ntohs(pt.r);
-                        pt.g = ntohs(pt.g);
-                        pt.b = ntohs(pt.b);
-                        pt.i = ntohs(pt.i);
-                        pt.u1 = ntohs(pt.u1);
-                        pt.u2 = ntohs(pt.u2);
-                    }
+                    // Data is already little-endian, no conversion needed
 
-                    if (g_dac_state == DACState::PREPARED || g_dac_state == DACState::PLAYING) {
+                    if (g_playback_state == PlaybackState::PREPARED || g_playback_state == PlaybackState::PLAYING) {
                         if (add_points_to_buffer(incoming)) {
                             send_ack(client_fd, CMD_DATA);
                         } else {
@@ -328,7 +353,7 @@ static void tcp_server_thread() {
                 }
 
                 case CMD_STOP: {
-                    g_dac_state = DACState::IDLE;
+                    g_playback_state = PlaybackState::IDLE;
                     {
                         std::lock_guard<std::mutex> lock(g_points_mutex);
                         int cleared = g_point_buffer.size();
@@ -336,14 +361,38 @@ static void tcp_server_thread() {
                         g_buffer_free.fetch_add(cleared);
                     }
                     send_ack(client_fd, CMD_STOP);
-                    printf("State: IDLE (stopped)\n");
+                    if (g_verbose) printf("State: IDLE (stopped)\n");
+                    break;
+                }
+
+                case CMD_PING: {
+                    send_ack(client_fd, CMD_PING);
+                    break;
+                }
+
+                case CMD_QUEUE_RATE: {
+                    queue_rate_command queue_cmd;
+                    if (recv(client_fd, &queue_cmd, sizeof(queue_cmd), MSG_WAITALL) != sizeof(queue_cmd)) {
+                        client_connected = false;
+                        break;
+                    }
+
+                    if (g_playback_state == PlaybackState::PREPARED || g_playback_state == PlaybackState::PLAYING) {
+                        // Queue rate change accepted (we'll apply it immediately for simplicity)
+                        g_point_rate = queue_cmd.point_rate;
+                        send_ack(client_fd, CMD_QUEUE_RATE);
+                        if (g_verbose) printf("Queue rate change: %u pps\n", queue_cmd.point_rate);
+                    } else {
+                        send_nak(client_fd, CMD_QUEUE_RATE, NAK_INVALID);
+                    }
                     break;
                 }
 
                 case CMD_ESTOP:
                 case CMD_ESTOP_ALT: {
                     printf("EMERGENCY STOP\n");
-                    g_dac_state = DACState::IDLE;
+                    g_light_engine_state = LightEngineState::ESTOP;
+                    g_playback_state = PlaybackState::IDLE;
                     {
                         std::lock_guard<std::mutex> lock(g_points_mutex);
                         int cleared = g_point_buffer.size();
@@ -354,18 +403,32 @@ static void tcp_server_thread() {
                     break;
                 }
 
+                case CMD_CLEAR_ESTOP: {
+                    if (g_light_engine_state == LightEngineState::ESTOP) {
+                        g_light_engine_state = LightEngineState::READY;
+                        send_ack(client_fd, CMD_CLEAR_ESTOP);
+                        if (g_verbose) printf("E-Stop cleared, state: READY\n");
+                    } else {
+                        send_nak(client_fd, CMD_CLEAR_ESTOP, NAK_INVALID);
+                    }
+                    break;
+                }
+
                 default:
                     printf("Unknown command: 0x%02X\n", command_byte);
-                    send_nak(client_fd, command_byte, NAK_INVALID);
+                    // Per spec: unrecognized commands trigger E-Stop
+                    g_light_engine_state = LightEngineState::ESTOP;
+                    g_playback_state = PlaybackState::IDLE;
+                    send_ack(client_fd, command_byte);  // Always ACK, even for unknown commands
                     break;
             }
         }
 
         close(client_fd);
-        printf("Client handler terminated\n");
+        if (g_verbose) printf("Client handler terminated\n");
 
         // Reset to IDLE when client disconnects
-        g_dac_state = DACState::IDLE;
+        g_playback_state = PlaybackState::IDLE;
     }
 
     close(server_fd);
@@ -377,12 +440,33 @@ int main(int argc, char *argv[]) {
     printf("Ether Dream Bridge for OpenLase\n");
     printf("Copyright (C) 2026 - Network interface daemon\n\n");
 
+    // Parse command line arguments
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "--verbose") == 0 || strcmp(argv[i], "-v") == 0) {
+            g_verbose = true;
+        } else if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
+            printf("Usage: %s [options]\n", argv[0]);
+            printf("Options:\n");
+            printf("  --verbose, -v    Enable verbose logging\n");
+            printf("  --help, -h       Show this help message\n");
+            return 0;
+        } else {
+            fprintf(stderr, "Unknown option: %s\n", argv[i]);
+            fprintf(stderr, "Use --help for usage information\n");
+            return 1;
+        }
+    }
+
+    if (g_verbose) {
+        printf("Verbose logging enabled\n\n");
+    }
+
     // Install signal handlers
     signal(SIGINT, signal_handler);
     signal(SIGTERM, signal_handler);
 
-    // Initialize OpenLase
-    if (olInit(3, 30000) < 0) {
+    // Initialize OpenLase with max buffer capacity
+    if (olInit(3, BUFFER_CAPACITY) < 0) {
         fprintf(stderr, "OpenLase initialization failed\n");
         return 1;
     }
@@ -407,7 +491,9 @@ int main(int argc, char *argv[]) {
 
     printf("OpenLase initialized (48kHz, full color)\n");
     printf("Buffer capacity: %d points\n", BUFFER_CAPACITY);
-    printf("Max point rate: %d pps\n\n", MAX_POINT_RATE);
+    printf("Max point rate: %d pps\n", MAX_POINT_RATE);
+    printf("Protocol sizes: dac_status=%zu, dac_response=%zu, dac_broadcast=%zu\n\n",
+           sizeof(dac_status), sizeof(dac_response), sizeof(dac_broadcast));
 
     // Start network threads
     std::thread udp_thread(udp_broadcast_thread);
@@ -428,7 +514,7 @@ int main(int argc, char *argv[]) {
         uint64_t last_packet = g_last_packet_time.load();
         bool timeout = (now - last_packet) > SAFETY_TIMEOUT_MS;
 
-        if (timeout && g_dac_state == DACState::PLAYING) {
+        if (timeout && g_playback_state == PlaybackState::PLAYING) {
             // Safety timeout - clear buffer and render blank
             printf("WARNING: Safety timeout (%llu ms), blanking output\n", now - last_packet);
             std::lock_guard<std::mutex> lock(g_points_mutex);
@@ -467,6 +553,11 @@ int main(int argc, char *argv[]) {
             }
 
             olEnd();
+
+            // Update point count if playing
+            if (g_playback_state == PlaybackState::PLAYING) {
+                g_point_count.fetch_add(points.size());
+            }
         } else {
             // No points - render a single blank point for safety
             olBegin(OL_POINTS);
@@ -475,12 +566,12 @@ int main(int argc, char *argv[]) {
         }
 
         // Render frame at 60 FPS
-        float ftime = olRenderFrame(60);
+        olRenderFrame(60);
         frame_count++;
 
-        if (frame_count % 300 == 0) {  // Every ~5 seconds at 60fps
+        if (g_verbose && frame_count % 300 == 0) {  // Every ~5 seconds at 60fps
             printf("Status: %d frames, state=%d, buffer_free=%d\n",
-                   frame_count, (int)g_dac_state.load(), g_buffer_free.load());
+                   frame_count, (int)g_playback_state.load(), g_buffer_free.load());
         }
     }
 

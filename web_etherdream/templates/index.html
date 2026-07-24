@@ -1,0 +1,331 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Ether Dream Interactive Controller</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Courier New', monospace;
+            background: #1a1a1a;
+            color: #00ff00;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
+        h1 {
+            text-align: center;
+            margin-bottom: 20px;
+            color: #00ff00;
+            text-shadow: 0 0 10px #00ff00;
+        }
+
+        .controls {
+            background: #2a2a2a;
+            border: 2px solid #00ff00;
+            padding: 15px;
+            margin-bottom: 20px;
+            border-radius: 5px;
+        }
+
+        .controls button {
+            background: #003300;
+            border: 2px solid #00ff00;
+            color: #00ff00;
+            padding: 10px 20px;
+            margin-right: 10px;
+            cursor: pointer;
+            font-family: 'Courier New', monospace;
+            font-size: 14px;
+            border-radius: 3px;
+        }
+
+        .controls button:hover {
+            background: #004400;
+        }
+
+        .controls button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        #status {
+            display: inline-block;
+            padding: 5px 15px;
+            background: #440000;
+            border: 1px solid #ff0000;
+            border-radius: 3px;
+            margin-left: 10px;
+        }
+
+        #status.connected {
+            background: #004400;
+            border-color: #00ff00;
+        }
+
+        .canvas-container {
+            position: relative;
+            background: #000;
+            border: 2px solid #00ff00;
+            margin-bottom: 20px;
+            display: inline-block;
+        }
+
+        #canvas {
+            display: block;
+            cursor: crosshair;
+        }
+
+        .info {
+            background: #2a2a2a;
+            border: 2px solid #00ff00;
+            padding: 15px;
+            border-radius: 5px;
+        }
+
+        .info h3 {
+            margin-bottom: 10px;
+            color: #00ff00;
+        }
+
+        .info ul {
+            list-style: none;
+            line-height: 1.6;
+        }
+
+        .info li:before {
+            content: "▸ ";
+            color: #00ff00;
+        }
+
+        .color-picker {
+            display: inline-block;
+            margin-left: 10px;
+        }
+
+        .color-picker input {
+            width: 60px;
+            height: 30px;
+            border: 2px solid #00ff00;
+            background: #000;
+            cursor: pointer;
+        }
+
+        #pointCount {
+            margin-left: 20px;
+            padding: 5px 10px;
+            background: #2a2a2a;
+            border: 1px solid #00ff00;
+            border-radius: 3px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>⚡ Ether Dream Interactive Controller ⚡</h1>
+
+        <div class="controls">
+            <button id="connectBtn" onclick="connect()">Connect</button>
+            <button id="disconnectBtn" onclick="disconnect()" disabled>Disconnect</button>
+            <button id="clearBtn" onclick="clearCanvas()">Clear Canvas</button>
+
+            <div class="color-picker">
+                <label>Color: </label>
+                <input type="color" id="colorPicker" value="#00ff00">
+            </div>
+
+            <span id="pointCount">Points: 0</span>
+            <span id="status">Disconnected</span>
+        </div>
+
+        <div class="canvas-container">
+            <canvas id="canvas" width="800" height="800"></canvas>
+        </div>
+
+        <div class="info">
+            <h3>Instructions:</h3>
+            <ul>
+                <li>Start the Docker container: <code>docker run -it --rm -p 5901:5900 -p 7654:7654/udp -p 7765:7765/tcp openlase:gui etherdream_bridge</code></li>
+                <li>Open VNC viewer to <code>localhost:5901</code> (password: openlase)</li>
+                <li>Click "Connect" to start streaming to the etherdream_bridge</li>
+                <li>Draw on the canvas with your mouse - hold and drag to draw</li>
+                <li>Your drawing appears in real-time in the VNC simulator</li>
+                <li>Choose different colors with the color picker</li>
+            </ul>
+        </div>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+        const colorPicker = document.getElementById('colorPicker');
+        const pointCountEl = document.getElementById('pointCount');
+        const statusEl = document.getElementById('status');
+        const connectBtn = document.getElementById('connectBtn');
+        const disconnectBtn = document.getElementById('disconnectBtn');
+
+        let isDrawing = false;
+        let points = [];
+        let drawnPoints = []; // Persistent storage of all drawn points
+        let currentColor = { r: 0, g: 1, b: 0 }; // Start with green
+        const MAX_POINTS = 10000; // Limit to prevent buffer overflow
+
+        // Convert canvas coordinates to laser coordinates [-1, 1]
+        function canvasToLaser(x, y) {
+            return {
+                x: (x / canvas.width) * 2 - 1,
+                y: -((y / canvas.height) * 2 - 1)  // Flip Y axis
+            };
+        }
+
+        // Hex color to RGB [0, 1]
+        function hexToRgb(hex) {
+            const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+            return result ? {
+                r: parseInt(result[1], 16) / 255,
+                g: parseInt(result[2], 16) / 255,
+                b: parseInt(result[3], 16) / 255
+            } : { r: 0, g: 1, b: 0 };
+        }
+
+        colorPicker.addEventListener('change', (e) => {
+            currentColor = hexToRgb(e.target.value);
+        });
+
+        canvas.addEventListener('mousedown', (e) => {
+            isDrawing = true;
+            const rect = canvas.getBoundingClientRect();
+            const x = e.clientX - rect.left;
+            const y = e.clientY - rect.top;
+            addPoint(x, y);
+        });
+
+        canvas.addEventListener('mousemove', (e) => {
+            if (!isDrawing) return;
+            const rect = canvas.getBoundingClientRect();
+            const x = e.clientX - rect.left;
+            const y = e.clientY - rect.top;
+            addPoint(x, y);
+        });
+
+        canvas.addEventListener('mouseup', () => {
+            isDrawing = false;
+        });
+
+        canvas.addEventListener('mouseleave', () => {
+            isDrawing = false;
+        });
+
+        function addPoint(x, y) {
+            // Don't add more points if we hit the limit
+            if (drawnPoints.length >= MAX_POINTS) {
+                return;
+            }
+
+            const laserCoords = canvasToLaser(x, y);
+
+            const point = {
+                x: laserCoords.x,
+                y: laserCoords.y,
+                r: currentColor.r,
+                g: currentColor.g,
+                b: currentColor.b
+            };
+
+            points.push(point);
+            drawnPoints.push(point); // Add to permanent storage
+
+            // Draw on canvas
+            ctx.fillStyle = colorPicker.value;
+            ctx.fillRect(x - 2, y - 2, 4, 4);
+
+            pointCountEl.textContent = `Points: ${drawnPoints.length} / ${MAX_POINTS}`;
+
+            // Flush temp buffer if it gets large
+            if (points.length >= 100) {
+                points = [];
+            }
+        }
+
+        function sendPoints() {
+            // Always send at least one blank point to prevent safety timeout
+            const pointsToSend = drawnPoints.length > 0 ? drawnPoints : [
+                { x: 0, y: 0, r: 0, g: 0, b: 0, blank: true }
+            ];
+
+            fetch('/send_points', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ points: pointsToSend })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.status === 'success') {
+                    // Don't log every frame to avoid spam
+                } else {
+                    console.error('Failed to send points:', data.message);
+                }
+            })
+            .catch(error => {
+                console.error('Error sending points:', error);
+            });
+        }
+
+        function clearCanvas() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            points = [];
+            drawnPoints = [];
+            pointCountEl.textContent = 'Points: 0';
+        }
+
+        async function connect() {
+            try {
+                const response = await fetch('/connect', { method: 'POST' });
+                const data = await response.json();
+
+                if (data.status === 'success') {
+                    statusEl.textContent = 'Connected';
+                    statusEl.classList.add('connected');
+                    connectBtn.disabled = true;
+                    disconnectBtn.disabled = false;
+                } else {
+                    alert('Connection failed: ' + data.message);
+                }
+            } catch (error) {
+                alert('Connection error: ' + error);
+            }
+        }
+
+        async function disconnect() {
+            try {
+                const response = await fetch('/disconnect', { method: 'POST' });
+                const data = await response.json();
+
+                statusEl.textContent = 'Disconnected';
+                statusEl.classList.remove('connected');
+                connectBtn.disabled = false;
+                disconnectBtn.disabled = true;
+            } catch (error) {
+                console.error('Disconnect error:', error);
+            }
+        }
+
+        // Continuously refresh display at ~33 FPS (30ms interval, under 50ms safety timeout)
+        setInterval(() => {
+            sendPoints();
+        }, 30);
+    </script>
+</body>
+</html>
